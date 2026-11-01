@@ -182,6 +182,11 @@ class MonitorConfig:
     # INSIDE a spec (the split would break it) -- use a YAML list then. None = no
     # host-proc tracking (the hostproc collector is a no-op without specs).
     host_procs: list[str] | None = None
+    # Pin the vm-monitor process (and its capture children) to these CPUs, e.g.
+    # "318,319" or "316-319" (forwarded verbatim as --pin-cpus; vm-monitor
+    # parses the list). Soft isolation for the monitor under full-host
+    # oversubscription load. None/empty = no affinity change.
+    pin_cpus: str | None = None
     # Log-capture rotation (the ``log_rotation:`` sub-block): devkit(top-down +
     # memory in parallel) -> ksys -> perf stat -> AMDuProfPcm, one group at a
     # time, for the stress window; per-turn timestamped logs land in
@@ -207,6 +212,10 @@ class MonitorConfig:
             host_procs = [t.strip() for t in raw_host_procs.split(",") if t.strip()]
         else:
             host_procs = [str(t).strip() for t in raw_host_procs if str(t).strip()]
+        raw_pin_cpus = raw.get("pin_cpus")
+        pin_cpus = str(raw_pin_cpus).strip() if raw_pin_cpus is not None else None
+        if pin_cpus == "":
+            pin_cpus = None
         # ponytail: .lower() normalizes YAML booleans too -- str(True)="True"
         # but the toggle comparisons below want lowercase "true"/"auto"/"false",
         # so an unquoted `enabled: true` would otherwise read as "True" and miss
@@ -225,6 +234,7 @@ class MonitorConfig:
             skip=skip,
             skip_charts=bool(raw.get("skip_charts", False)),
             host_procs=host_procs,
+            pin_cpus=pin_cpus,
             log_rotation=LogRotationConfig.from_raw(raw.get("log_rotation")),
         )
 
@@ -288,6 +298,10 @@ class MonitorController:
         # passed through verbatim (comm or comm:cmdline_substr); vm-monitor parses.
         for spec in self._config.monitor.host_procs or []:
             cmd += ["--host-proc", spec]
+        # Forward monitor.pin_cpus verbatim (--pin-cpus); vm-monitor parses the
+        # CPU list. None/empty forwards nothing (no affinity change).
+        if self._config.monitor.pin_cpus:
+            cmd += ["--pin-cpus", self._config.monitor.pin_cpus]
         # Skip the xlsx chart phase (forwards --no-charts). Opt-in for huge runs
         # where the openpyxl chart build dominates export time.
         if self._config.monitor.skip_charts:

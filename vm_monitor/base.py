@@ -52,6 +52,15 @@ except (ValueError, OSError, AttributeError):
 # ublk runtime it is simply absent -> daemon CPU history stays empty.
 _UBLK_DAEMON_COMM = "uvm-ublk-daemon"
 
+# Circuit-breaker budget for the numastat subprocess fallback, refilled once
+# per collect_sample cycle. The fallback only runs when the numa_maps fast
+# path fails -- exactly the VM-churn regime of a memory-pressured oversub
+# host -- and each call forks this (large, multi-threaded) process, which
+# under pressure can stall seconds or fail outright. Beyond the budget (or
+# after one fork failure/timeout) the breaker opens and the existing psutil
+# fallback in _collect_single_vm answers instead: zero forks in the hot path.
+_NUMASTAT_MAX_SPAWNS_PER_CYCLE = 8
+
 # Block-layer stat sector size. The kernel documents /sys/block/<dev>/stat
 # sector counters as always 512 bytes regardless of the physical sector size.
 _SECTOR_SIZE_BYTES = 512
@@ -70,7 +79,7 @@ _BYTES_PER_MIB = 2**20
 _VIRTUAL_DISK_PREFIXES = ("loop", "ram", "sr", "zram", "md", "dm", "ublk")
 
 
-# Names of the /proc-based resource collectors collect_sample / _disk_subsample_sleep
+# Names of the /proc-based resource collectors collect_sample / _disk_subsample_tick
 # can gate off via --no-X (see vm_monitor/cli.py COLLECTOR_FLAGS). The default
 # enabled set is the full set (backward-compat: all collectors on). Internal names
 # are the snake_case collector method stems; cli.py maps hyphenated flag stems to these.
@@ -333,7 +342,7 @@ class _ProcRawWriter:
         self._thread = threading.Thread(target=self._run, name="proc-raw-writer", daemon=True)
         self._thread.start()
 
-    # --- producers (collect_sample / _disk_subsample_sleep call these; O(1) puts) ---
+    # --- producers (collect_sample / _disk_subsample_tick call these; O(1) puts) ---
     def enqueue_proc(self, ts: str, meminfo: dict, vmstat: dict, stat: dict) -> None:
         self._q.put(("proc", ts, meminfo, vmstat, stat))
 
@@ -726,7 +735,7 @@ class VMMonitorBase(ABC):
         # Per-collector enable set. Default = every collector on (backward-compat).
         # --no-X flags (forwarded by bench_core monitor.skip) remove names here via
         # disable_collectors(); _collects() gates each call in collect_sample /
-        # _disk_subsample_sleep. A disabled collector leaves its history empty so
+        # _disk_subsample_tick. A disabled collector leaves its history empty so
         # every downstream consumer (exporters / svg_exporter / realtime table /
         # summary) already degrades to omitting that sheet/SVG (verified: no
         # unguarded consumers exist).
@@ -737,7 +746,7 @@ class VMMonitorBase(ABC):
         # per-VM jiffies + per-disk counters to <log_dir>/{host,vm,disk,numa}_*.csv
         # on a background thread so the sampling loop never blocks on file I/O.
         # Started lazily on the first collect_sample() call once log_dir is known
-        # (disk raw enqueues from _disk_subsample_sleep find it already started);
+        # (disk raw enqueues from the disk-subsample thread find it already started);
         # joined at monitoring end.
         self.log_dir: str | None = None
         self._proc_raw: _ProcRawWriter | None = None
@@ -746,6 +755,24 @@ class VMMonitorBase(ABC):
         # (numa_cpu_map.csv) so /sys/.../cpulist is read once per run, not per
         # cycle. None until first use.
         self._numa_cpu_map: dict[int, list[int]] | None = None
+
+        # Dedicated 1s-cadence disk/ublk sub-sampler thread. Runs concurrently
+        # with the main sample loop, so a slow collect_sample cycle (mmap-lock
+        # contention under memory pressure) can no longer starve the disk/ublk
+        # data stream. Started by the monitoring loops, joined in their finally.
+        self._disk_thread: threading.Thread | None = None
+        self._disk_thread_stop = threading.Event()
+
+        # numastat-fallback circuit breaker state (see module constant above).
+        # Budget starts full so a standalone call (tests, one-off use) reaches
+        # the fallback; collect_sample refills it once per cycle.
+        self._numastat_budget = _NUMASTAT_MAX_SPAWNS_PER_CYCLE
+        self._numastat_broken = False
+        self._numastat_warned = False
+        self._numastat_lock = threading.Lock()
+
+        # Monotonic ts of the last slow-cycle WARNING (cooldown against spam).
+        self._last_slow_cycle_log = float("-inf")
 
     def _collects(self, name: str) -> bool:
         """True if collector ``name`` is currently enabled."""
@@ -1197,7 +1224,7 @@ class VMMonitorBase(ABC):
         via deltas from the previous sample normalized by the ACTUAL elapsed
         wall-clock time between reads (time.monotonic delta), not the nominal
         self.interval. Disk is sub-sampled at a 1-second cadence by
-        _disk_subsample_sleep regardless of the general sampling interval, so
+        the disk-subsample thread regardless of the general sampling interval, so
         r_mb_s / w_mb_s reflect a true 1-second window -- burst peaks are not
         smeared over a longer interval. First sample (no prior baseline)
         records zero rates. Missing devices are skipped silently. Bus (nvme vs
@@ -1853,10 +1880,39 @@ class VMMonitorBase(ABC):
             result.pop("_parsed", None)  # remove internal flag before returning
             return result
 
-        # Slow fallback: subprocess numastat
+        # Slow fallback: subprocess numastat, guarded by a circuit breaker
+        # (budget refilled per collect_sample cycle). When the breaker is open
+        # the psutil fallback in _collect_single_vm answers instead, keeping
+        # the sampling hot path fork-free on a memory-pressured host.
         result = {"total_mb": 0.0, "huge_mb": 0.0, "private_mb": 0.0, "heap_mb": 0.0, "stack_mb": 0.0, "per_node": {}}
+        if self._numastat_broken:
+            return result
+        with self._numastat_lock:
+            if self._numastat_budget <= 0:
+                self._numastat_broken = True
+            else:
+                self._numastat_budget -= 1
+        if self._numastat_broken:
+            if not self._numastat_warned:
+                self._numastat_warned = True
+                logger.warning(
+                    "numastat fallback budget (%d forks/cycle) exhausted; subprocess fallback "
+                    "disabled for this run -- psutil PSS/RSS answers instead",
+                    _NUMASTAT_MAX_SPAWNS_PER_CYCLE,
+                )
+            return result
         try:
             output = subprocess.run(["numastat", "-p", str(pid)], capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            # Fork failure (ENOMEM/EAGAIN) or a hung numastat: open the breaker
+            # permanently -- further attempts would fail or stall the same way.
+            self._numastat_broken = True
+            if not self._numastat_warned:
+                self._numastat_warned = True
+                logger.warning("numastat subprocess failed (%s); subprocess fallback disabled for this run", exc)
+            return result
+
+        try:
             if output.returncode != 0:
                 return result
 
@@ -2364,10 +2420,13 @@ class VMMonitorBase(ABC):
         """Collect one sample (full refresh each time).
 
         Disk I/O and ublk device count are NOT collected here -- they are
-        sub-sampled at a 1-second cadence by _disk_subsample_sleep (called
-        during the main loop's sleep), so disk_history and ublk_history carry
-        true per-second bandwidth regardless of the general sampling interval.
+        sub-sampled at a 1-second cadence by the dedicated disk-subsample
+        thread (_disk_subsample_loop), so disk_history and ublk_history carry
+        true per-second bandwidth regardless of the general sampling interval
+        and regardless of how long this per-VM cycle takes.
         """
+        # Refill the numastat-fallback fork budget for this cycle.
+        self._numastat_budget = _NUMASTAT_MAX_SPAWNS_PER_CYCLE
         if self._collects("hugepage"):
             self.collect_hugepage_stats()
         if self._collects("numa_cpu"):
@@ -2445,36 +2504,75 @@ class VMMonitorBase(ABC):
             self.data.append(record)
         return sample_data
 
-    def _disk_subsample_sleep(self, seconds: float) -> None:
-        """Sleep for ``seconds``, sampling disk I/O + ublk count every 1s.
+    def _disk_subsample_tick(self) -> None:
+        """One disk/ublk/ublk-daemon/hostproc sample tick (1s cadence).
 
-        Disk bandwidth is computed over a 1-second window regardless of the
-        general sampling interval (``self.interval``), so r_mb_s / w_mb_s are
-        true per-second rates -- burst peaks are not smeared over a longer
-        interval. Disk and ublk are sampled together each tick so disk_history
-        and ublk_history stay index-aligned for the Disk_IO_Timeline sheet
-        (both carry real per-row timestamps, so the timeline x-axis is real
-        elapsed seconds, not ``index * interval``). Returns early when
-        ``self.running`` is cleared (stop signal). No-op when ``seconds <= 0``.
+        Called only from _disk_subsample_loop (the dedicated sub-sampler
+        thread). Disk and ublk tick together so disk_history and
+        ublk_history stay index-aligned for the Disk_IO_Timeline sheet (both
+        carry real per-row timestamps, so the timeline x-axis is real
+        elapsed seconds, not ``index * interval``).
         """
-        if seconds <= 0 or not self.running:
+        if self._collects("disk"):
+            self.collect_disk_stats()
+        if self._collects("ublk"):
+            self.collect_ublk_count()
+        if self._collects("ublk_daemon"):
+            self.collect_ublk_daemon()
+        if self._collects("hostproc") and self._hostproc_specs:
+            self.collect_host_procs()
+
+    def _disk_subsample_loop(self) -> None:
+        """Body of the dedicated disk-subsample thread: tick every 1s.
+
+        Runs concurrently with the main sample loop, so a stalled
+        collect_sample (mmap-lock contention under memory pressure) can no
+        longer starve the disk/ublk data stream. Rates stay correct: the
+        collectors divide by the ACTUAL monotonic elapsed between reads.
+        Exits when the stop event is set or self.running is cleared.
+        """
+        while not self._disk_thread_stop.is_set() and self.running:
+            start = time.monotonic()
+            self._disk_subsample_tick()
+            elapsed = time.monotonic() - start
+            self._disk_thread_stop.wait(max(0.0, 1.0 - elapsed))
+
+    def _start_disk_thread(self) -> None:
+        """(Re)start the dedicated disk/ublk sub-sampler thread."""
+        self._disk_thread_stop.clear()
+        self._disk_thread = threading.Thread(target=self._disk_subsample_loop, name="disk-subsample", daemon=True)
+        self._disk_thread.start()
+
+    def _stop_disk_thread(self) -> None:
+        """Signal + join the disk-subsample thread (idempotent)."""
+        self._disk_thread_stop.set()
+        if self._disk_thread is not None:
+            self._disk_thread.join(timeout=2)
+            self._disk_thread = None
+
+    # collect_sample slower than max(2x interval, 5s) logs a WARNING (with a
+    # cooldown) so a memory-pressured host leaves evidence in stdout.log
+    # instead of failing silently. The disk/ublk thread is unaffected.
+    _SLOW_CYCLE_FACTOR = 2
+    _SLOW_CYCLE_FLOOR_S = 5.0
+    _SLOW_CYCLE_LOG_COOLDOWN_S = 30.0
+
+    def _warn_slow_cycle(self, duration_s: float) -> None:
+        """Log (cooldown-limited) when one per-VM collect cycle is suspiciously slow."""
+        threshold = max(self._SLOW_CYCLE_FACTOR * self.interval, self._SLOW_CYCLE_FLOOR_S)
+        if duration_s <= threshold:
             return
-        end = time.monotonic() + seconds
-        while self.running:
-            remaining = end - time.monotonic()
-            if remaining <= 0:
-                break
-            time.sleep(min(1.0, remaining))
-            if not self.running:
-                break
-            if self._collects("disk"):
-                self.collect_disk_stats()
-            if self._collects("ublk"):
-                self.collect_ublk_count()
-            if self._collects("ublk_daemon"):
-                self.collect_ublk_daemon()
-            if self._collects("hostproc") and self._hostproc_specs:
-                self.collect_host_procs()
+        now = time.monotonic()
+        if now - self._last_slow_cycle_log < self._SLOW_CYCLE_LOG_COOLDOWN_S:
+            return
+        self._last_slow_cycle_log = now
+        logger.warning(
+            "slow sampling cycle: collect_sample took %.1fs (threshold %.1fs, %d VMs) -- "
+            "host under heavy load; disk/ublk sub-sampling continues on its own thread",
+            duration_s,
+            threshold,
+            self.last_vm_count,
+        )
 
     def display_realtime_table(self, sample_data, elapsed_time, duration, check_method=""):
         """Display real-time table"""
@@ -2678,6 +2776,7 @@ class VMMonitorBase(ABC):
 
         print("Stress test detected! Starting monitoring...")
         self.running = True
+        self._start_disk_thread()
         start_time = time.time()
 
         def handler(sig, frame):
@@ -2709,19 +2808,22 @@ class VMMonitorBase(ABC):
                     self.running = False
                     break
 
+                collect_t0 = time.monotonic()
                 sample = self.collect_sample()
+                self._warn_slow_cycle(time.monotonic() - collect_t0)
                 elapsed_str = str(timedelta(seconds=int(elapsed)))
                 dur_str = str(timedelta(seconds=int(duration_seconds))) if duration_seconds else "infinity"
                 self.display_realtime_table(sample, elapsed_str, dur_str, f"Stress Sync: {check_type}={check_target}")
 
                 sl = max(0, interval_seconds - (time.time() - loop_start))
                 if sl > 0 and self.running:
-                    # Disk bandwidth sub-samples at 1s during the sleep, so
-                    # r_mb_s / w_mb_s stay per-second-accurate at any interval.
-                    self._disk_subsample_sleep(sl)
+                    # Disk/ublk sub-sampling runs on its own 1s thread; the
+                    # main loop here just paces the next per-VM collect cycle.
+                    time.sleep(sl)
         except KeyboardInterrupt:
             pass
         finally:
+            self._stop_disk_thread()
             self._close_proc_raw()
         return self.data
 
@@ -2735,6 +2837,7 @@ class VMMonitorBase(ABC):
         self._last_cpu_total = None  # avoid stale /proc/stat iowait baseline
         self._dirty_limits_read = False  # re-read dirty sysctls on restart
         self.running = True
+        self._start_disk_thread()
         start_time = time.time()
 
         def handler(sig, frame):
@@ -2754,7 +2857,9 @@ class VMMonitorBase(ABC):
         try:
             while self.running:
                 loop_start = time.time()
+                collect_t0 = time.monotonic()
                 sample = self.collect_sample()
+                self._warn_slow_cycle(time.monotonic() - collect_t0)
                 elapsed = time.time() - start_time
                 elapsed_str = str(timedelta(seconds=int(elapsed)))
                 dur_str = str(timedelta(seconds=int(duration_seconds))) if duration_seconds else "infinity"
@@ -2767,12 +2872,13 @@ class VMMonitorBase(ABC):
 
                 sl = max(0, interval_seconds - (time.time() - loop_start))
                 if sl > 0 and self.running:
-                    # Disk bandwidth sub-samples at 1s during the sleep, so
-                    # r_mb_s / w_mb_s stay per-second-accurate at any interval.
-                    self._disk_subsample_sleep(sl)
+                    # Disk/ublk sub-sampling runs on its own 1s thread; the
+                    # main loop here just paces the next per-VM collect cycle.
+                    time.sleep(sl)
         except KeyboardInterrupt:
             pass
         finally:
+            self._stop_disk_thread()
             self._close_proc_raw()
         return self.data
 

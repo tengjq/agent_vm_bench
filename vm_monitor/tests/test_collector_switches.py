@@ -1,11 +1,12 @@
 """Tests for the per-collector enable/disable switches in vm_monitor/base.py.
 
-A disabled collector must NOT be called from collect_sample / _disk_subsample_sleep;
+A disabled collector must NOT be called from collect_sample / _disk_subsample_tick;
 its history stays empty so downstream sheets/SVGs omit it. The shared /proc/meminfo
 + /proc/vmstat + /proc/stat reads now run unconditionally every cycle (the raw
 /proc CSV dumper is an always-on consumer), so disabling every /proc-metric
 consumer still leaves meminfo/vmstat/stat read.
 """
+
 from __future__ import annotations
 
 import vm_monitor.base as base
@@ -47,7 +48,7 @@ class _RecorderMonitor(VMMonitorBase):
     def collect_vm_total_memory(self, vms):  # noqa: N802 - recorder seam
         self._record("vm_total")
 
-    # The 2 collectors invoked from _disk_subsample_sleep:
+    # The collectors invoked from _disk_subsample_tick:
     def collect_disk_stats(self):  # noqa: N802 - recorder seam
         self._record("disk")
 
@@ -94,7 +95,7 @@ class _RecorderMonitor(VMMonitorBase):
 
 
 # collect_sample drives these 8 + the shared meminfo/vmstat/stat reads (disk/ublk
-# are sub-sampled separately by _disk_subsample_sleep). meminfo/vmstat/stat are
+# are sub-sampled separately by _disk_subsample_tick). meminfo/vmstat/stat are
 # read unconditionally every cycle (raw /proc CSV dumper is an always-on consumer).
 _SAMPLE_DRIVEN = {
     "hugepage",
@@ -144,63 +145,48 @@ def test_shared_proc_read_runs_even_when_all_consumers_disabled():
     assert "hugepage" in mon.called  # other collectors still run
 
 
-def test_disk_subsample_skips_disabled_disk(monkeypatch):
+def test_disk_subsample_skips_disabled_disk():
     mon = _RecorderMonitor()
     mon.running = True
     mon.disable_collectors({"disk"})
-    monkeypatch.setattr(base.time, "sleep", lambda s: None)
-    ticks = iter([0.0, 1.0, 2.0])
-    monkeypatch.setattr(base.time, "monotonic", lambda: next(ticks, 999.0))
-    mon._disk_subsample_sleep(2.0)
+    mon._disk_subsample_tick()
     assert "disk" not in mon.called
     assert "ublk" in mon.called  # ublk is independent and still enabled
 
 
-def test_disk_subsample_skips_disabled_ublk(monkeypatch):
+def test_disk_subsample_skips_disabled_ublk():
     mon = _RecorderMonitor()
     mon.running = True
     mon.disable_collectors({"ublk"})
-    monkeypatch.setattr(base.time, "sleep", lambda s: None)
-    ticks = iter([0.0, 1.0, 2.0])
-    monkeypatch.setattr(base.time, "monotonic", lambda: next(ticks, 999.0))
-    mon._disk_subsample_sleep(2.0)
+    mon._disk_subsample_tick()
     assert "ublk" not in mon.called
     assert "disk" in mon.called
 
 
-def test_disk_subsample_skips_hostproc_when_no_specs(monkeypatch):
+def test_disk_subsample_skips_hostproc_when_no_specs():
     """hostproc is a no-op (and not called) when --host-proc specs are empty,
     even with the collector enabled -- the guard is `collects AND specs`."""
     mon = _RecorderMonitor()
     mon.running = True
-    monkeypatch.setattr(base.time, "sleep", lambda s: None)
-    ticks = iter([0.0, 1.0, 2.0])
-    monkeypatch.setattr(base.time, "monotonic", lambda: next(ticks, 999.0))
-    mon._disk_subsample_sleep(2.0)
+    mon._disk_subsample_tick()
     assert "hostproc" not in mon.called  # no specs -> guarded out
 
 
-def test_disk_subsample_skips_disabled_hostproc(monkeypatch):
+def test_disk_subsample_skips_disabled_hostproc():
     """--no-hostproc globally skips collection regardless of specs."""
     mon = _RecorderMonitor()
     mon.running = True
     mon.disable_collectors({"hostproc"})
     mon.set_host_proc_specs(["server:release/server"])
-    monkeypatch.setattr(base.time, "sleep", lambda s: None)
-    ticks = iter([0.0, 1.0, 2.0])
-    monkeypatch.setattr(base.time, "monotonic", lambda: next(ticks, 999.0))
-    mon._disk_subsample_sleep(2.0)
+    mon._disk_subsample_tick()
     assert "hostproc" not in mon.called  # disabled -> skipped even with specs
 
 
-def test_disk_subsample_runs_hostproc_when_enabled_with_specs(monkeypatch):
+def test_disk_subsample_runs_hostproc_when_enabled_with_specs():
     mon = _RecorderMonitor()
     mon.running = True
     mon.set_host_proc_specs(["server:release/server"])
-    monkeypatch.setattr(base.time, "sleep", lambda s: None)
-    ticks = iter([0.0, 1.0, 2.0])
-    monkeypatch.setattr(base.time, "monotonic", lambda: next(ticks, 999.0))
-    mon._disk_subsample_sleep(2.0)
+    mon._disk_subsample_tick()
     assert "hostproc" in mon.called
 
 

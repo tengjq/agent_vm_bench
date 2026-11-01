@@ -790,3 +790,24 @@ def test_merge_source_none_when_missing(monkeypatch, tmp_path, caplog):
     # must not raise; warns and returns None
     assert mc.merge_source() is None
     assert any("report missing" in r.message.lower() for r in caplog.records)
+
+
+def test_command_pin_cpus_forwarded(monkeypatch, tmp_path):
+    monkeypatch.setattr("bench_core.observability.monitor.shutil.which", lambda _: "/fake/vm-monitor")
+    prov = _StubProvider(vmm_type="firecracker")
+    mc = MonitorController(_cfg(pin_cpus="318,319", stress_file=str(tmp_path / "lock")), prov)
+    i = mc._cmd.index("--pin-cpus")
+    assert mc._cmd[i + 1] == "318,319"
+    # default config forwards nothing (no affinity change)
+    mc_default = MonitorController(_cfg(stress_file=str(tmp_path / "lock")), prov)
+    assert "--pin-cpus" not in mc_default._cmd
+
+
+def test_monitor_config_pin_cpus_from_raw():
+    raw = {"sandbox": {"total_count": 1}, "monitor": {"pin_cpus": "318,319"}}
+    assert KernelConfig.from_raw(raw).monitor.pin_cpus == "318,319"
+    # absent -> None
+    assert KernelConfig.from_raw({"sandbox": {"total_count": 1}}).monitor.pin_cpus is None
+    # empty string normalizes to None (no affinity change)
+    empty = KernelConfig.from_raw({"sandbox": {"total_count": 1}, "monitor": {"pin_cpus": ""}})
+    assert empty.monitor.pin_cpus is None

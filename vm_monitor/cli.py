@@ -291,6 +291,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "Use --no-hostproc to disable the whole collector.",
     )
 
+    # High-load hardening: OOM protection + optional CPU pinning, applied at
+    # startup before any thread/capture child exists (children inherit both).
+    parser.add_argument(
+        "--oom-score-adj",
+        type=int,
+        default=-1000,
+        help="Write /proc/self/oom_score_adj at startup so the OOM killer "
+        "avoids the monitor under host memory pressure (default -1000, the "
+        "kernel maximum; capture children inherit it). 0 disables. A write "
+        "error only logs a warning -- hardening never blocks startup.",
+    )
+    parser.add_argument(
+        "--pin-cpus",
+        type=str,
+        default=None,
+        help="Pin the monitor (and its capture children) to these CPUs, e.g. "
+        "'318,319' or '316-319'. Soft isolation: steadier scheduling/cache "
+        "affinity under full-host load. Unset = no affinity change.",
+    )
+
     return parser
 
 
@@ -393,6 +413,54 @@ def _run_raw_report(argv):
         return 1
 
 
+def _parse_cpu_list(spec: str) -> list[int]:
+    """Parse a CPU list like '0,2,8-11' into a sorted list of cpu ids.
+
+    Accepts single ids and inclusive ranges, mixed freely. Raises ValueError
+    on malformed input (empty list, non-numeric token, inverted range).
+    """
+    cpus: set[int] = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            lo_s, hi_s = part.split("-", 1)
+            lo, hi = int(lo_s), int(hi_s)
+            if lo > hi:
+                raise ValueError(f"invalid cpu range {part!r}")
+            cpus.update(range(lo, hi + 1))
+        else:
+            cpus.add(int(part))
+    if not cpus:
+        raise ValueError("empty cpu list")
+    return sorted(cpus)
+
+
+def _harden_process(oom_score_adj: int, pin_cpus: str | None) -> None:
+    """Apply OOM protection + optional CPU pinning before any thread starts.
+
+    Called from main() before capture/monitor threads exist, so every child
+    process (devkit/ksys/perf/uprof) inherits oom_score_adj and affinity.
+    Both steps degrade to a warning on failure -- hardening must never keep
+    the monitor from starting.
+    """
+    if oom_score_adj:
+        try:
+            with open("/proc/self/oom_score_adj", "w") as f:
+                f.write(str(oom_score_adj))
+            print(f"[HARDENING] oom_score_adj={oom_score_adj} (OOM killer skips this monitor)")
+        except OSError as exc:
+            print(f"[WARN] could not set oom_score_adj={oom_score_adj}: {exc}")
+    if pin_cpus:
+        try:
+            cpus = _parse_cpu_list(pin_cpus)
+            os.sched_setaffinity(0, set(cpus))
+            print(f"[HARDENING] pinned to CPUs {cpus} (soft isolation; children inherit)")
+        except (ValueError, OSError) as exc:
+            print(f"[WARN] could not pin CPUs {pin_cpus!r}: {exc}")
+
+
 def main(argv=None):
     """Main entry point for VM monitoring tool.
 
@@ -405,6 +473,10 @@ def main(argv=None):
         return _run_raw_report(argv[1:])
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+
+    # OOM protection + optional CPU pin before any thread/capture exists, so
+    # every capture child (devkit/ksys/perf/uprof) inherits both.
+    _harden_process(args.oom_score_adj, args.pin_cpus)
 
     # Check root permission
     if hasattr(os, "geteuid") and os.geteuid() != 0:
