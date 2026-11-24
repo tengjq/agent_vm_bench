@@ -45,7 +45,7 @@ oversub-bench --config config/common/replay.yaml --provider aenv --ratios 1,2,3 
 | 键 | 默认 | 含义 |
 |-----|------|------|
 | `base_config` | —(必填) | base replay 压力 profile;每 trial 深拷贝 |
-| `provider` | `aenv` | `{aenv, e2b, docker, fake}` |
+| `provider` | `aenv` | `{aenv, e2b, docker, cubesandbox, sandboxsched, agentsandbox, fake}` |
 | `running_concurrency` | base `replay.running_concurrency` | 基线 N;lifecycle 时每 trial 放大到 k×N(全量并发),exec mode 保持 N(ratio 基准) |
 | `ratios` | `1,2,3` | k 值(list 或 `"1,2,3"`);`total_count = k×N` |
 | `modes` | `exec_ephemeral,lifecycle` | 要扫的 replay mode(每条曲线;默认 exec_ephemeral 纯 COW 在前,lifecycle 其次);driver 自动套用默认时 WARNING |

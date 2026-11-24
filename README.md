@@ -120,12 +120,12 @@ Coding configs are minimal: `source_files` omitted → the `CodingConfig` view
 ### 3. CLI
 
 ```text
-bench-core --config <yaml> --provider {fake,e2b,docker,aenv,cubesandbox,agentsandbox} [mode/params]
+bench-core --config <yaml> --provider {fake,e2b,docker,aenv,cubesandbox,sandboxsched,agentsandbox} [mode/params]
 ```
 
 | Flag | Description |
 |------|-------------|
-| `--provider` | `fake` (no SDK) / `e2b` / `docker` / `aenv` / `cubesandbox` / `agentsandbox` (kubernetes-sigs/agent-sandbox) |
+| `--provider` | `fake` (no SDK) / `e2b` / `docker` / `aenv` / `cubesandbox` / `sandboxsched` / `agentsandbox` (kubernetes-sigs/agent-sandbox) |
 | `-n, --total-count` | override sandbox count |
 | `--create-only` | create + ready-check + persist IDs, then exit (keep running) |
 | `--detect` | reuse existing sandboxes (no create); no cleanup at end |

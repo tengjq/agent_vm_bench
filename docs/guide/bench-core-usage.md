@@ -144,13 +144,13 @@ docker `Config.from_raw` never reads it.)
 ## 3. CLI
 
 ```text
-bench-core --config <yaml> --provider {fake,e2b,docker,aenv,cubesandbox,agentsandbox} [mode/params]
+bench-core --config <yaml> --provider {fake,e2b,docker,aenv,cubesandbox,sandboxsched,agentsandbox} [mode/params]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `--config` | YAML config path |
-| `--provider` | `fake` (no SDK) / `e2b` / `docker` / `aenv` / `cubesandbox` / `agentsandbox` (kubernetes-sigs/agent-sandbox) |
+| `--provider` | `fake` (no SDK) / `e2b` / `docker` / `aenv` / `cubesandbox` / `sandboxsched` / `agentsandbox` (kubernetes-sigs/agent-sandbox) |
 | `-n, --total-count` | override sandbox count |
 | `--workflow-type` | `browser` / `coding` / `document` / `replay` |
 | `-bm, --benchmark-mode` | `fixed` / `round_robin` |

@@ -48,7 +48,7 @@ keys are **rejected** (a typo like `repeat:` vs `repeats:` fails loudly).
 | key | default | meaning |
 |-----|---------|---------|
 | `base_config` | — (required) | base replay stress profile; deep-copied per trial |
-| `provider` | `aenv` | `{aenv, e2b, docker, fake}` |
+| `provider` | `aenv` | `{aenv, e2b, docker, cubesandbox, sandboxsched, agentsandbox, fake}` |
 | `running_concurrency` | base `replay.running_concurrency` | ratio basis N; lifecycle scales it to k×N per trial (full-scale fleet) |
 | `ratios` | `1,2,3` | k values (list or `"1,2,3"`); `total_count = k×N` |
 | `modes` | `exec_ephemeral,lifecycle` | replay modes to sweep (one curve each; default = exec_ephemeral pure-COW first, then lifecycle); a WARNING fires when the driver auto-applies the default |
