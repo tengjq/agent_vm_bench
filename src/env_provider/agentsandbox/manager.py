@@ -283,13 +283,19 @@ class SandboxManager(BaseSandboxManager):
                 f"Sandbox '{name}' exists with foreign ownership labels {labels};"
                 " refusing to delete it (container_prefix collision on a shared namespace?)"
             )
-        self.custom.delete_namespaced_custom_object(
-            group=SANDBOX_API_GROUP,
-            version=SANDBOX_API_VERSION,
-            namespace=self.config.namespace,
-            plural=SANDBOX_PLURAL,
-            name=name,
-        )
+        try:
+            self.custom.delete_namespaced_custom_object(
+                group=SANDBOX_API_GROUP,
+                version=SANDBOX_API_VERSION,
+                namespace=self.config.namespace,
+                plural=SANDBOX_PLURAL,
+                name=name,
+            )
+        except ApiException as e:
+            if e.status != 404:
+                raise
+            # The CR vanished between the GET and the DELETE (controller
+            # expiry, concurrent cleanup) -- nothing left to replace.
 
     def _sandbox_body(self, name: str, image: str) -> dict[str, Any]:
         """Build the Sandbox CR body (pod spec + server-side TTL)."""

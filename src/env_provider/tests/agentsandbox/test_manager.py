@@ -260,6 +260,26 @@ class TestCreateSingle:
         assert custom.deleted == ["agentsbx-1"]
         assert len(custom.created) == 2
 
+    def test_stale_vanished_between_get_and_delete(self, monkeypatch):
+        # The GET passes (owned CR), the DELETE removes it but reports 404
+        # (the CR vanished server-side in between -- controller expiry,
+        # concurrent cleanup): the create must proceed, not fail.
+        custom = _FakeCustom()
+        mgr, _mgr2 = _manager(monkeypatch, custom=custom)
+        _seed_cr(custom, "agentsbx-1", ready=True)
+        original_delete = custom.delete_namespaced_custom_object
+
+        def _delete_then_404(group, version, namespace, plural, name):  # noqa: ARG001
+            original_delete(group=group, version=version, namespace=namespace, plural=plural, name=name)
+            raise manager_module.ApiException(status=404)
+
+        custom.delete_namespaced_custom_object = _delete_then_404
+
+        result = mgr._create_single(mgr._new_state(1))
+
+        assert result["success"] is True
+        assert len(custom.created) == 1
+
     def test_stale_foreign_owner_refused(self, monkeypatch):
         # A name collision with another team's CR (same prefix, shared
         # namespace) is refused -- _delete_stale must never delete it.
