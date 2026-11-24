@@ -264,35 +264,59 @@ class SandboxManager(BaseSandboxManager):
         """Remove a stale same-name Sandbox CR (recreate path); ignore 404.
 
         Mirrors docker's same-name container removal: a leftover CR from an
-        earlier run would 409 (AlreadyExists) the create.
+        earlier run would 409 (AlreadyExists) the create. The ownership
+        labels are checked first -- a name collision with another team's CR
+        (same prefix, shared namespace) is refused, never deleted.
         """
         try:
-            self.custom.delete_namespaced_custom_object(
-                group=SANDBOX_API_GROUP,
-                version=SANDBOX_API_VERSION,
-                namespace=self.config.namespace,
-                plural=SANDBOX_PLURAL,
-                name=name,
-            )
+            existing = self._get(name)
         except ApiException as e:
             if e.status != 404:
                 raise
+            return
+        labels = (existing.get("metadata") or {}).get("labels") or {}
+        if (
+            labels.get(LABEL_MANAGED_BY) != _MANAGED_BY_VALUE
+            or labels.get(LABEL_SANDBOX_GROUP) != self.config.sandbox_group
+        ):
+            raise RuntimeError(
+                f"Sandbox '{name}' exists with foreign ownership labels {labels};"
+                " refusing to delete it (container_prefix collision on a shared namespace?)"
+            )
+        self.custom.delete_namespaced_custom_object(
+            group=SANDBOX_API_GROUP,
+            version=SANDBOX_API_VERSION,
+            namespace=self.config.namespace,
+            plural=SANDBOX_PLURAL,
+            name=name,
+        )
 
     def _sandbox_body(self, name: str, image: str) -> dict[str, Any]:
         """Build the Sandbox CR body (pod spec + server-side TTL)."""
-        pod_spec: dict[str, Any] = {"containers": [self._container_spec(image)]}
+        pod_spec: dict[str, Any] = {
+            "containers": [self._container_spec(image)],
+            # No in-sandbox workload needs the namespace SA token; upstream
+            # defaults it false for template-provisioned sandboxes -- match
+            # that secure-by-default posture for direct Sandbox creation too.
+            "automountServiceAccountToken": False,
+        }
         if self.config.runtime_class_name:
             pod_spec["runtimeClassName"] = self.config.runtime_class_name
         # datetime.UTC (UP017) needs py311; the kernel's runtime floor is py310.
         expires = datetime.now(timezone.utc) + timedelta(seconds=self.config.sandbox_ttl)  # noqa: UP017
         shutdown_time = expires.isoformat(timespec="seconds")
+        # SandboxSpec embeds Lifecycle json:",inline", so shutdownTime/
+        # shutdownPolicy are TOP-LEVEL spec properties in the v1beta1 CRD --
+        # a nested spec.lifecycle object would be silently pruned by the API
+        # server and the TTL would never land.
         return {
             "apiVersion": f"{SANDBOX_API_GROUP}/{SANDBOX_API_VERSION}",
             "kind": "Sandbox",
             "metadata": {"name": name, "labels": self._ownership_labels()},
             "spec": {
                 "podTemplate": {"spec": pod_spec},
-                "lifecycle": {"shutdownTime": shutdown_time, "shutdownPolicy": "Delete"},
+                "shutdownTime": shutdown_time,
+                "shutdownPolicy": "Delete",
             },
         }
 
@@ -337,7 +361,7 @@ class SandboxManager(BaseSandboxManager):
                 raise RuntimeError(f"Sandbox '{name}' backing pod finished: {finished}")
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"Sandbox '{name}' not Ready within {self.config.ready_timeout}s")
-            time.sleep(min(_POLL_INTERVAL, max(deadline - time.monotonic(), _POLL_INTERVAL)))
+            time.sleep(_POLL_INTERVAL)
 
     def _get(self, name: str) -> dict[str, Any]:
         return self.custom.get_namespaced_custom_object(
@@ -398,8 +422,11 @@ class SandboxManager(BaseSandboxManager):
         Returns ``(exit_code, stdout, stderr)``. The k8s exec stream has no
         cwd/env kwargs, so commands are wrapped the same way the docker
         adapter wraps them (``cd`` + env prefix, both shell-quoted).
-        ``timeout`` bounds the connection + reads (None = unbounded -- the
-        adapter runs kernel-facing execs under its own watchdog thread).
+        ``timeout`` bounds the WHOLE session: the connect request gets
+        ``_request_timeout`` (which on the real client only bounds the
+        websocket connect, not the stream) and the read loop enforces a
+        monotonic deadline. None = unbounded -- kernel-facing adapter execs
+        run under their own watchdog thread instead.
         """
         wrapped = wrap_command(command, cwd=cwd, env=env)
         request = k8s_stream(
@@ -415,10 +442,13 @@ class SandboxManager(BaseSandboxManager):
             _preload_content=False,
             **({"_request_timeout": timeout} if timeout else {}),
         )
+        deadline = time.monotonic() + timeout if timeout else None
         stdout = ""
         stderr = ""
         try:
             while request.is_open():
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError(f"exec stream did not finish within {timeout}s: {command[:80]}")
                 request.update(timeout=_POLL_INTERVAL)
                 if request.peek_stdout():
                     stdout += request.read_stdout()
@@ -431,7 +461,17 @@ class SandboxManager(BaseSandboxManager):
                 stderr += request.read_stderr()
         finally:
             request.close()
-        exit_code = request.returncode if request.returncode is not None else 0
+        try:
+            exit_code = request.returncode
+        except TypeError:
+            # A stream that closed without a status frame (pod deleted
+            # mid-exec, connection dropped) makes the client's channel-3
+            # parser raise a bare TypeError -- surface it diagnosably.
+            raise RuntimeError(
+                "exec stream closed without an exit status frame (pod gone or connection dropped?)"
+            ) from None
+        if exit_code is None:
+            exit_code = 0  # only reachable on clients whose returncode stays unset
         return exit_code, stdout, stderr
 
     def check_alive(self, state: SandboxState) -> bool:

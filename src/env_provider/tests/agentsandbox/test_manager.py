@@ -126,20 +126,26 @@ class _FakeStreamClient:
 
     Mirrors the real client's contract: ``peek_*`` returns the buffer without
     consuming it, ``read_*`` drains it, ``returncode`` carries the exit status.
+    ``hangs=True`` models a wedged stream (never closes, no output);
+    ``drop_status=True`` models a channel that closed without a status frame
+    (the real client raises a bare TypeError reading ``returncode`` then).
     """
 
-    def __init__(self, *, stdout="", stderr="", returncode=0):
+    def __init__(self, *, stdout="", stderr="", returncode=0, hangs=False, drop_status=False):
         self._stdout_buf = stdout
         self._stderr_buf = stderr
-        self.returncode = returncode
+        self._returncode = returncode
+        self._hangs = hangs
+        self._drop_status = drop_status
         self._updated = False
         self.close_called = False
 
     def is_open(self):
-        return not self._updated
+        return self._hangs or not self._updated
 
     def update(self, timeout=None):  # noqa: ARG002
-        self._updated = True
+        if not self._hangs:
+            self._updated = True
 
     def peek_stdout(self):
         return self._stdout_buf
@@ -154,6 +160,12 @@ class _FakeStreamClient:
     def read_stderr(self):
         err, self._stderr_buf = self._stderr_buf, ""
         return err
+
+    @property
+    def returncode(self):
+        if self._drop_status:
+            raise TypeError("'NoneType' object is not subscriptable")  # real client's parse failure
+        return self._returncode
 
     def close(self):
         self.close_called = True
@@ -210,8 +222,10 @@ class TestCreateSingle:
         assert body["metadata"]["labels"] == {"managed_by": "bench-core", "sandbox_group": "sg-1"}
         container = body["spec"]["podTemplate"]["spec"]["containers"][0]
         assert container["image"] == "python:3.11"
-        assert body["spec"]["lifecycle"]["shutdownPolicy"] == "Delete"
-        assert "shutdownTime" in body["spec"]["lifecycle"]
+        # SandboxSpec embeds its lifecycle struct inline -> TOP-LEVEL spec props
+        assert body["spec"]["shutdownPolicy"] == "Delete"
+        assert "shutdownTime" in body["spec"]
+        assert body["spec"]["podTemplate"]["spec"]["automountServiceAccountToken"] is False
 
     def test_resources_and_pod_knobs_forwarded(self, monkeypatch):
         config = _config(
@@ -245,6 +259,19 @@ class TestCreateSingle:
         assert result["success"] is True
         assert custom.deleted == ["agentsbx-1"]
         assert len(custom.created) == 2
+
+    def test_stale_foreign_owner_refused(self, monkeypatch):
+        # A name collision with another team's CR (same prefix, shared
+        # namespace) is refused -- _delete_stale must never delete it.
+        mgr, custom = _manager(monkeypatch)
+        obj = _seed_cr(custom, "agentsbx-1", group="sg-other")
+        assert obj["metadata"]["labels"]["managed_by"] == "bench-core"  # right manager, wrong group
+
+        result = mgr._create_single(mgr._new_state(1))
+
+        assert result["success"] is False
+        assert "foreign ownership labels" in result["error"]
+        assert custom.created == [] and custom.deleted == []
 
     def test_missing_sandbox_group_fails_fast(self, monkeypatch):
         mgr, custom = _manager(monkeypatch, config=_config(sandbox_group=""))
@@ -448,6 +475,21 @@ class TestPodExec:
         captured = _fake_stream(monkeypatch, _FakeStreamClient())
         mgr.pod_exec("agentsbx-1", "true")
         assert captured["kwargs"]["container"] == "main"
+
+    def test_pod_exec_timeout_bounds_hanging_stream(self, monkeypatch):
+        # _request_timeout alone only bounds the websocket connect on the real
+        # client; the read-loop deadline is what bounds a wedged-but-open
+        # stream (the probe/browser-helper callers have no outer watchdog).
+        mgr, _custom = _manager(monkeypatch)
+        _fake_stream(monkeypatch, _FakeStreamClient(hangs=True))
+        with pytest.raises(TimeoutError, match="did not finish within 1s"):
+            mgr.pod_exec("agentsbx-1", "sleep infinity", timeout=1)
+
+    def test_pod_exec_dropped_status_frame_raises_diagnosable(self, monkeypatch):
+        mgr, _custom = _manager(monkeypatch)
+        _fake_stream(monkeypatch, _FakeStreamClient(returncode=0, drop_status=True))
+        with pytest.raises(RuntimeError, match="without an exit status frame"):
+            mgr.pod_exec("agentsbx-1", "true")
 
 
 # ------------------------------------------------------------ browser helpers

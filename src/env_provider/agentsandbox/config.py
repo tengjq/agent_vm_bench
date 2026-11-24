@@ -68,10 +68,11 @@ class Config:
     # this -- the CR-level wait only proves the pod came up.
     ready_timeout: int = 300
 
-    # Server-side TTL seconds: spec.lifecycle.shutdownTime =
-    # now + sandbox_ttl (shutdownPolicy Delete), so a fleet whose cleanup
-    # failed is reclaimed by the agent-sandbox controller instead of occupying
-    # cluster resources forever. NOT a create-wait budget (that is
+    # Server-side TTL seconds: spec.shutdownTime = now + sandbox_ttl
+    # (shutdownPolicy Delete), so a fleet whose cleanup failed is reclaimed by
+    # the agent-sandbox controller instead of occupying cluster resources
+    # forever. Both are TOP-LEVEL spec properties (SandboxSpec embeds its
+    # lifecycle struct inline); NOT a create-wait budget (that is
     # ready_timeout). The default 86400 (24h) keeps a leaked fleet reclaimable
     # within a day; lower it if that is a concern.
     sandbox_ttl: int = 86400

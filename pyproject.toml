@@ -65,7 +65,7 @@ sandboxsched = ["opensandbox==1.2.0"]
 # try/except pattern as cubesandbox: install only when using
 # --provider agentsandbox. The provider talks to a cluster with the
 # agent-sandbox controller installed (helm chart of that repo).
-agentsandbox = ["kubernetes>=30.0.0"]
+agentsandbox = ["kubernetes>=30.0.0,<38"]
 
 [project.scripts]
 vm-monitor = "vm_monitor.cli:main"

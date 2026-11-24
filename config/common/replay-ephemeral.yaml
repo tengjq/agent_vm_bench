@@ -52,8 +52,9 @@ agentsandbox:
   # resources: {cpu: "2", memory: "2Gi"}   # container requests+limits
   # runtime_class_name: "gvisor"       # isolation runtime (gvisor/kata), "" -> cluster default
   # image_pull_policy: "IfNotPresent"  # "" -> kubelet default
+  # pod_container: ""                  # pod container the exec stream runs in; "" -> single-container pods
   # ready_timeout: 300                 # sec to wait for the Sandbox CR Ready condition (raise for big fleets)
-  # sandbox_ttl: 86400                 # server-side TTL sec (spec.lifecycle.shutdownTime, policy Delete)
+  # sandbox_ttl: 86400                 # server-side TTL sec (spec.shutdownTime, policy Delete)
 
 docker:
   image: "ubuntu-openclaw-coding-python:24.04-arm64"
