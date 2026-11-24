@@ -124,13 +124,13 @@ YAML 里 `your_e2b_access_token_here` / `your_e2b_api_key_here` 是占位符。
 ## 3. CLI
 
 ```
-bench-core --config <yaml> --provider {fake,e2b,docker,aenv,cubesandbox} [模式/参数]
+bench-core --config <yaml> --provider {fake,e2b,docker,aenv,cubesandbox,agentsandbox} [模式/参数]
 ```
 
 | 参数 | 说明 |
 |------|------|
 | `--config` | YAML 配置路径 |
-| `--provider` | `fake`(无 SDK)/ `e2b` / `docker` / `aenv` / `cubesandbox` |
+| `--provider` | `fake`(无 SDK)/ `e2b` / `docker` / `aenv` / `cubesandbox` / `agentsandbox`(kubernetes-sigs/agent-sandbox) |
 | `-n, --total-count` | 覆盖沙箱总数 |
 | `--workflow-type` | `browser` / `coding` / `document` |
 | `-bm, --benchmark-mode` | `fixed` / `round_robin` |
