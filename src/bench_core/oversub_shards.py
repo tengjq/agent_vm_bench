@@ -52,6 +52,7 @@ Known simplifications (measured, not assumed away):
   though per-trajectory run counts are preserved. Single-template (the oversub
   default) is exactly faithful.
 """
+
 from __future__ import annotations
 
 import copy
@@ -328,6 +329,9 @@ def build_shard_config(trial_cfg: dict, spec: ShardSpec, *, count: int, owns_col
     docker = cfg.get("docker")
     if isinstance(docker, dict) and docker.get("container_prefix"):
         docker["container_prefix"] = f"{docker['container_prefix']}-s{spec.index}"
+    agentsandbox = cfg.get("agentsandbox")
+    if isinstance(agentsandbox, dict) and agentsandbox.get("container_prefix"):
+        agentsandbox["container_prefix"] = f"{agentsandbox['container_prefix']}-s{spec.index}"
     replay = cfg.get("replay")
     if isinstance(replay, dict) and replay.get("launch_interval_sec"):
         replay["launch_interval_sec"] = replay["launch_interval_sec"] * count

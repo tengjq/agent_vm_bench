@@ -60,6 +60,13 @@ cubesandbox = ["cubesandbox>=0.7.0"]
 # SandboxState class attrs).
 sandboxsched = ["opensandbox==1.2.0"]
 
+# Kubernetes (AgentSandbox) provider SDK -- drives the kubernetes-sigs/
+# agent-sandbox Sandbox CRD (agents.x-k8s.io/v1beta1) + pod-exec streams. Same
+# try/except pattern as cubesandbox: install only when using
+# --provider agentsandbox. The provider talks to a cluster with the
+# agent-sandbox controller installed (helm chart of that repo).
+agentsandbox = ["kubernetes>=30.0.0"]
+
 [project.scripts]
 vm-monitor = "vm_monitor.cli:main"
 bench-core = "bench_core.bench:main"

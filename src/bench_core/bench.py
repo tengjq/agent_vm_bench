@@ -19,6 +19,7 @@ provider that needs to batch does so inside that method.
 live in ``e2b_bench`` / ``docker_bench``, which build their provider and call
 :func:`run_benchmark` directly.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -70,6 +71,7 @@ _PROVIDERS: dict[str, tuple[str, str]] = {
     "aenv": ("env_provider.aenv", "AenvProvider"),
     "cubesandbox": ("env_provider.cubesandbox", "CubesandboxProvider"),
     "sandboxsched": ("env_provider.sandboxsched", "SandboxSchedProvider"),
+    "agentsandbox": ("env_provider.agentsandbox", "AgentSandboxProvider"),
 }
 
 
@@ -239,8 +241,7 @@ def _print_header(config: KernelConfig, provider: EnvironmentProvider) -> None:
         lines.append("  Benchmark Mode: fixed")
         if config.benchmark_percent < 1.0:
             lines.append(
-                f"  Benchmark: {config.benchmark_count}/{config.total_count} "
-                f"({config.benchmark_percent * 100:.0f}%)"
+                f"  Benchmark: {config.benchmark_count}/{config.total_count} ({config.benchmark_percent * 100:.0f}%)"
             )
     logger.info("\n".join(lines))
     logger.info("=" * 80)
@@ -793,7 +794,7 @@ def run_benchmark(config: KernelConfig, provider: EnvironmentProvider) -> dict[s
             except Exception:
                 logger.exception("series_writer.close failed during teardown")
         if not _artifacts_flushed:
-            logger.warning("Trial interrupted, writing partial artifacts, skipping full " "report/xlsx generation")
+            logger.warning("Trial interrupted, writing partial artifacts, skipping full report/xlsx generation")
             if config.workflow_type == "replay" and series_path is not None and Path(series_path).exists():
                 try:
                     from bench_core.observability.trajectory_export import export_trajectories
@@ -872,7 +873,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--log-level",
         default="info",
         choices=["debug", "info", "warning"],
-        help="root log level (default info; debug also surfaces per-step " "stderr for non-zero exits)",
+        help="root log level (default info; debug also surfaces per-step stderr for non-zero exits)",
     )
     parser.add_argument("-n", "--total-count", type=int)
     parser.add_argument("--workflow-type", choices=["browser", "coding", "document", "replay"])
@@ -954,6 +955,8 @@ def _build_provider(name: str, config: KernelConfig, raw_config: dict[str, Any])
         from env_provider.cubesandbox import build_provider
     elif name == "sandboxsched":
         from env_provider.sandboxsched import build_provider
+    elif name == "agentsandbox":
+        from env_provider.agentsandbox import build_provider
     else:
         raise ValueError(f"Unknown provider: {name}")
     return build_provider(config, raw_config)

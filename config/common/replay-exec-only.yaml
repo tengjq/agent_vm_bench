@@ -35,6 +35,20 @@ e2b:
     E2B_API_URL: "http://localhost:3000"
     E2B_HTTP_SSL: "false"
 
+agentsandbox:
+  template: "python:3.11"              # container image for the Sandbox pod (per-slot templates override)
+  container_prefix: "agentsbx-replay"  # Sandbox CR names: f"{prefix}-{index}"
+  sandbox_group: "sg-k8s"              # REQUIRED ownership label (managed_by=bench-core + this);
+                                       # --cleanup/--detect scope their listing to the pair (missing -> fail fast)
+  namespace: "default"
+  # kubeconfig: ""                     # kubeconfig path ("" -> $KUBECONFIG / ~/.kube/config, current context)
+  # context: ""                        # kubeconfig context ("" -> current)
+  # resources: {cpu: "2", memory: "2Gi"}   # container requests+limits
+  # runtime_class_name: "gvisor"       # isolation runtime (gvisor/kata), "" -> cluster default
+  # image_pull_policy: "IfNotPresent"  # "" -> kubelet default
+  # ready_timeout: 300                 # sec to wait for the Sandbox CR Ready condition (raise for big fleets)
+  # sandbox_ttl: 86400                 # server-side TTL sec (spec.lifecycle.shutdownTime, policy Delete)
+
 docker:
   image: "ubuntu-openclaw-coding-python:24.04-arm64"
   container_prefix: "oc-replay"
