@@ -73,6 +73,21 @@ aenv:
     E2B_API_URL: "http://127.0.0.1:8000"      # AENV control plane (POST /sandboxes)
     E2B_SANDBOX_URL: "http://127.0.0.1:8000"  # AENV data plane (envd proxy)
 
+agentsandbox:
+  template: "ubuntu-openclaw-coding-java:24.04-x86_64"                  # Sandbox pod image (node pulls from its registry; node-preloaded names also work)
+  container_prefix: "oc-bench"  # Sandbox CR names: f"{prefix}-{index}"
+  sandbox_group: "sg-coding-java"             # REQUIRED ownership label (managed_by=bench-core + this);
+                                       # --cleanup/--detect scope their listing to the pair (missing -> fail fast)
+  namespace: "default"
+  # kubeconfig: ""                     # kubeconfig path ("" -> $KUBECONFIG / ~/.kube/config, current context)
+  # context: ""                        # kubeconfig context ("" -> current)
+  resources: {cpu: "2", memory: "4Gi"}  # container requests+limits (2U4G)
+  # runtime_class_name: "gvisor"       # isolation runtime (gvisor/kata), "" -> cluster default
+  image_pull_policy: "IfNotPresent"    # set IfNotPresent for images preloaded into the node
+  # container_command: ["sleep", "infinity"]  # keep-alive override (images whose CMD is an interactive shell crash-loop without it)
+  # pod_container: ""                  # pod container the exec stream runs in; "" -> single-container pods
+  ready_timeout: 300                   # sec to wait for the Sandbox CR Ready condition (raise for big fleets)
+  # sandbox_ttl: 86400                 # server-side TTL sec (spec.shutdownTime, policy Delete)
 docker:
   # Build dockerfile_build/coding/java/Dockerfile.x86 (gson + JDK 11 + Maven,
   # deps warmed for `mvn -o`), then point this at it. The same tag is what
