@@ -54,10 +54,19 @@ class Config:
     # Optional pod knobs. ``resources`` ({"cpu": "2", "memory": "2Gi"}) is set
     # as both requests and limits on the sandbox container;
     # ``runtime_class_name`` selects an isolation runtime (gVisor/Kata);
-    # ``image_pull_policy`` empty omits the field (kubelet default).
+    # ``image_pull_policy`` empty omits the field (kubelet default -- which is
+    # Always for untagged/:latest images; set IfNotPresent for images
+    # preloaded into the node).
     resources: dict[str, str] | None = None
     runtime_class_name: str = ""
     image_pull_policy: str = ""
+
+    # Container command override -- images whose default CMD is an
+    # interactive shell (e.g. ``/bin/bash``) exit as soon as the pod's
+    # non-TTY stdin hits EOF and crash-loop; a keep-alive command like
+    # ["sleep", "infinity"] keeps the container up (the replay drives real
+    # work through exec, which spawns its own shells). Empty -> image CMD.
+    container_command: list[str] | None = None
 
     # Pod container the exec stream runs in; empty -> the pod's single
     # container (multi-container images must name the exec target here).
@@ -95,6 +104,7 @@ class Config:
             resources=backend.get("resources"),
             runtime_class_name=str(backend.get("runtime_class_name", "") or ""),
             image_pull_policy=str(backend.get("image_pull_policy", "") or ""),
+            container_command=backend.get("container_command"),
             pod_container=str(backend.get("pod_container", "") or ""),
             ready_timeout=int(backend.get("ready_timeout", 300)),
             sandbox_ttl=int(backend.get("sandbox_ttl", 86400)),

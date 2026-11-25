@@ -244,12 +244,20 @@ class TestEphemeral:
 # ------------------------------------------------------------------ build/roster
 class TestBuildProvider:
     def test_build_from_raw(self):
-        raw = {"agentsandbox": {"sandbox_group": "sg-1", "template": "python:3.11", "namespace": "bench"}}
+        raw = {
+            "agentsandbox": {
+                "sandbox_group": "sg-1",
+                "template": "python:3.11",
+                "namespace": "bench",
+                "container_command": ["sleep", "infinity"],
+            }
+        }
         p = build_provider(_kernel_config(), raw)
         assert isinstance(p, AgentSandboxProvider)
         assert p._config.sandbox_group == "sg-1"
         assert p._config.template == "python:3.11"
         assert p._config.namespace == "bench"
+        assert p._config.container_command == ["sleep", "infinity"]
         assert p._manager is None  # still lazy
 
     def test_build_from_empty_raw(self):

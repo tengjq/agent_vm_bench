@@ -330,6 +330,8 @@ class SandboxManager(BaseSandboxManager):
         spec: dict[str, Any] = {"name": self.config.pod_container or "sandbox", "image": image}
         if self.config.image_pull_policy:
             spec["imagePullPolicy"] = self.config.image_pull_policy
+        if self.config.container_command:
+            spec["command"] = list(self.config.container_command)
         if self.config.resources:
             spec["resources"] = {"requests": dict(self.config.resources), "limits": dict(self.config.resources)}
         return spec

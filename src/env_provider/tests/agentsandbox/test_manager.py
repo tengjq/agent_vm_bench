@@ -234,6 +234,7 @@ class TestCreateSingle:
             runtime_class_name="gvisor",
             image_pull_policy="IfNotPresent",
             pod_container="main",
+            container_command=["sleep", "infinity"],
         )
         mgr, custom = _manager(monkeypatch, config=config)
         result = mgr._create_single(mgr._new_state(1))
@@ -243,6 +244,7 @@ class TestCreateSingle:
         assert container["image"] == "ubuntu-openclaw:24.04"
         assert container["name"] == "main"
         assert container["imagePullPolicy"] == "IfNotPresent"
+        assert container["command"] == ["sleep", "infinity"]
         assert container["resources"] == {
             "requests": {"cpu": "2", "memory": "4Gi"},
             "limits": {"cpu": "2", "memory": "4Gi"},
