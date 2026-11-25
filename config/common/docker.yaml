@@ -22,21 +22,6 @@
 workflow_type: browser
 
 # === backend block (docker-only; read by env_provider.docker.Config.from_raw) ===
-agentsandbox:
-  template: "ubuntu-openclaw-chromium:24.04-arm64"                  # Sandbox pod image (node pulls from its registry; node-preloaded names also work)
-  container_prefix: "oc-bench"  # Sandbox CR names: f"{prefix}-{index}"
-  sandbox_group: "sg-docker"             # REQUIRED ownership label (managed_by=bench-core + this);
-                                       # --cleanup/--detect scope their listing to the pair (missing -> fail fast)
-  namespace: "default"
-  # kubeconfig: ""                     # kubeconfig path ("" -> $KUBECONFIG / ~/.kube/config, current context)
-  # context: ""                        # kubeconfig context ("" -> current)
-  resources: {cpu: "2", memory: "4Gi"}  # container requests+limits (2U4G)
-  # runtime_class_name: "gvisor"       # isolation runtime (gvisor/kata), "" -> cluster default
-  image_pull_policy: "IfNotPresent"    # set IfNotPresent for images preloaded into the node
-  # container_command: ["sleep", "infinity"]  # keep-alive override (images whose CMD is an interactive shell crash-loop without it)
-  # pod_container: ""                  # pod container the exec stream runs in; "" -> single-container pods
-  ready_timeout: 300                   # sec to wait for the Sandbox CR Ready condition (raise for big fleets)
-  # sandbox_ttl: 86400                 # server-side TTL sec (spec.shutdownTime, policy Delete)
 docker:
   image: "ubuntu-openclaw-chromium:24.04-arm64"  # Docker image name
   container_prefix: "oc-bench"             # Container name prefix (oc-bench-1, ...)
