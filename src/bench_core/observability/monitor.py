@@ -297,10 +297,15 @@ class MonitorController:
         exe = shutil.which(_VM_MONITOR_BIN)
         if exe is None:
             return []
-        cmd = [
-            exe,
-            "--vmm",
-            self._vmm_resolved,
+        cmd = [exe]
+        if self._vmm_resolved:
+            # Pod backends (vmm_type=None) force-enabled via --vm-monitor true
+            # have no VMM to discover; omit --vmm so the vm-monitor CLI defaults
+            # to its qemu adapter -- per-VM discovery finds nothing but host
+            # level sampling still runs. Embedding None here used to crash
+            # subprocess.Popen with a TypeError after the fleet was built.
+            cmd += ["--vmm", self._vmm_resolved]
+        cmd += [
             "-i",
             str(self._interval),
             "--numa",

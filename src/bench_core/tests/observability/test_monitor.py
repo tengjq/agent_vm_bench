@@ -840,3 +840,26 @@ def test_merge_source_none_when_missing(monkeypatch, tmp_path, caplog):
     # must not raise; warns and returns None
     assert mc.merge_source() is None
     assert any("report missing" in r.message.lower() for r in caplog.records)
+
+
+def test_build_cmd_omits_vmm_for_pod_provider():
+    """Force-enabling the monitor on a provider without a VMM (pod backends)
+    must not embed a None element in the subprocess command (a TypeError
+    crashed the bench after fleet creation) and must omit --vmm entirely --
+    the vm-monitor CLI then defaults to its qemu adapter, collecting
+    host-level data with empty per-VM sections."""
+    prov = _StubProvider(name="agentsandbox", vmm_type=None)
+    mc = MonitorController(_cfg(enabled="true"), prov)
+    cmd = mc._build_cmd()
+    assert cmd and cmd[0].endswith("vm-monitor")
+    assert "--vmm" not in cmd
+    assert None not in cmd
+
+
+def test_build_cmd_keeps_vmm_for_vmm_provider():
+    prov = _StubProvider(name="e2b", vmm_type="firecracker")
+    mc = MonitorController(_cfg(enabled="true"), prov)
+    cmd = mc._build_cmd()
+    assert "--vmm" in cmd
+    assert cmd[cmd.index("--vmm") + 1] == "firecracker"
+    assert None not in cmd
