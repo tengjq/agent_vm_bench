@@ -445,3 +445,23 @@ class TestSvgExport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_psi_svg_written_when_history_present(tmp_path):
+    """psi_history populated -> psi.svg rendered with both panels; absent ->
+    psi.svg is skipped (PSI-less hosts)."""
+    m = _full_monitor()
+    m.psi_history = [
+        {"ts": "2026-11-25 10:00:00", "cpu_some": 1.0, "cpu_full": 0.2, "mem_some": 2.0, "mem_full": 0.1},
+        {"ts": "2026-11-25 10:00:10", "cpu_some": 3.0, "cpu_full": 0.4, "mem_some": 4.0, "mem_full": 0.2},
+    ]
+    with tempfile.TemporaryDirectory() as d:
+        written = export_svg_reports(m, d)
+        assert os.path.join(d, "psi.svg") in written
+        text = open(os.path.join(d, "psi.svg")).read()
+        assert "PSI CPU Stall (avg10)" in text and "PSI Memory Stall (avg10)" in text
+
+    m2 = _full_monitor()
+    with tempfile.TemporaryDirectory() as d:
+        written = export_svg_reports(m2, d)
+        assert "psi.svg" not in [os.path.basename(p) for p in written]

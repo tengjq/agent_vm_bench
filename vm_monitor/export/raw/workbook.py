@@ -72,6 +72,12 @@ _HOST_COLUMNS = (
     ("procs_blocked", "Procs blocked"),
     ("sandboxes_running", "Sandboxes running (API)"),
     ("sandboxes_paused", "Sandboxes paused (API)"),
+    ("psi_cpu_some", "PSI CPU some (avg10 %)"),
+    ("psi_cpu_full", "PSI CPU full (avg10 %)"),
+    ("psi_mem_some", "PSI Mem some (avg10 %)"),
+    ("psi_mem_full", "PSI Mem full (avg10 %)"),
+    ("psi_cpu_stall_pct", "PSI CPU stall (% wall)"),
+    ("psi_mem_stall_pct", "PSI Mem stall (% wall)"),
 )
 
 # (title, y-axis title, series columns). Skips any series whose column is
@@ -93,6 +99,7 @@ _HOST_CHARTS = (
     ("Procs running/blocked", "count", ("procs_running", "procs_blocked")),
     ("Concurrent VMs", "count", ("concurrent_vms",)),
     ("Sandbox states (API)", "count", ("sandboxes_running", "sandboxes_paused")),
+    ("PSI stall (avg10)", "% of window", ("psi_cpu_some", "psi_cpu_full", "psi_mem_some", "psi_mem_full")),
 )
 
 # Disk I/O display labels, keyed by df-column suffix ("<device>_<field>"). Keeps

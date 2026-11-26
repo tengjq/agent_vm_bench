@@ -163,6 +163,7 @@ def derive_host(raw_dir=None, *, frames: dict | None = None) -> pd.DataFrame:
         _vmstat_block(f, epochs, df["__dt"]),
         _fleet_block(f, epochs),
         _api_block(f, epochs),
+        _psi_block(f, epochs),
     ):
         df = df.join(block)
     _warn_if_cores_exceed_host(df, cpu["timestamp"])
@@ -270,6 +271,55 @@ def _vmstat_block(frames: dict, epochs: pd.Series, interval: pd.Series) -> pd.Da
         block.iat[i, block.columns.get_loc("swap_out_mib_s")] = (
             max(0.0, _f(cur, "pswpout") - _f(prev, "pswpout")) * 4096 / _BYTES_PER_MIB / dt
         )
+    return block
+
+
+def _psi_block(frames: dict, epochs: pd.Series) -> pd.DataFrame:
+    """PSI stall gauges + derived stall share from host_psi_raw.csv.
+
+    PSI rows land every PSI_MIN_INTERVAL (~10 s), so the avg10 gauges are
+    forward-filled onto the sample grid (a gauge is valid until the next
+    read). The *_stall_pct columns derive from the total counters per the
+    raw-data contract (delta total / 1e6 over the real psi-row interval,
+    clamped >= 0, NaN before the first pair). PSI-less captures (no
+    host_psi_raw.csv) contribute no columns -- the sheet and its chart
+    degrade cleanly.
+    """
+    psi = frames.get("psi")
+    if psi is None or psi.empty:
+        return pd.DataFrame(index=epochs.index)
+    names = (
+        "psi_cpu_some",
+        "psi_cpu_full",
+        "psi_mem_some",
+        "psi_mem_full",
+        "psi_cpu_stall_pct",
+        "psi_mem_stall_pct",
+    )
+    block = pd.DataFrame(math.nan, index=epochs.index, columns=names, dtype=float)
+    psi = psi.sort_values("__e").drop_duplicates("__e", keep="last")
+    stamps = pd.Index(epochs.to_numpy(dtype=float))
+    v_idx = pd.Index(psi["__e"].to_numpy(dtype=float))
+    gauges = {
+        "psi_cpu_some": "cpu_some_avg10",
+        "psi_cpu_full": "cpu_full_avg10",
+        "psi_mem_some": "memory_some_avg10",
+        "psi_mem_full": "memory_full_avg10",
+    }
+    for col, src in gauges.items():
+        series = pd.Series(psi[src].to_numpy(dtype=float), index=v_idx)
+        block[col] = pd.Series(series.reindex(stamps, method="ffill").to_numpy(), index=epochs.index)
+    totals = {
+        "psi_cpu_stall_pct": "cpu_some_total",
+        "psi_mem_stall_pct": "memory_some_total",
+    }
+    for col, src in totals.items():
+        tot = psi[src].to_numpy(dtype=float)
+        rate = pd.Series(np.full(len(tot), math.nan), index=v_idx)
+        if len(tot) > 1:
+            dt = np.diff(v_idx)
+            rate.iloc[1:] = np.maximum(0.0, tot[1:] - tot[:-1]) / 1e6 / np.maximum(dt, 1e-9) * 100.0
+        block[col] = pd.Series(rate.reindex(stamps, method="ffill").to_numpy(), index=epochs.index)
     return block
 
 

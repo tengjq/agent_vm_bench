@@ -225,6 +225,7 @@ def _load_frames(raw_dir) -> dict[str, object | None]:
         "numa_mem": _with_epoch(_read_csv_optional(raw_dir, "numa_mem_raw.csv", {"node": "int64"})),
         "api": _with_epoch(_read_csv_optional(raw_dir, "api_state_raw.csv")),
         "hostproc": _with_epoch(_read_csv_optional(raw_dir, "hostproc_cpu_raw.csv", {"pid": "int64"})),
+        "psi": _with_epoch(_read_csv_optional(raw_dir, "host_psi_raw.csv")),
     }
 
 

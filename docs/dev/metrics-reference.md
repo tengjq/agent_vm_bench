@@ -581,6 +581,11 @@ PSI-capable hosts.
 > `/proc/pressure/io` is deliberately not collected: its stall signal overlaps the existing
 > `disk_io_raw.csv` / ublk / iowait series.
 
+The derived timeline lands in `host_resources.xlsx` (`PSI * (avg10 %)` gauge columns forward-filled
+onto the sample grid, `PSI * stall (% wall)` derived from `Δtotal`) with a `PSI stall (avg10)` chart
+on the Host resources sheet, and `psi.svg` renders the same curves. PSI-less captures contribute no
+columns and the chart drops.
+
 ### Per-VM & ublk-daemon & host-proc CPU (raw jiffies — `vm_cpu_raw.csv` / `ublk_cpu_raw.csv` / `hostproc_cpu_raw.csv`)
 
 These raw CSVs store **cumulative** `/proc/<pid>/stat` `utime`+`stime` jiffies

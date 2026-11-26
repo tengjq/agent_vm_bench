@@ -827,6 +827,7 @@ class VMMonitorBase(ABC):
         self._psi_missing_warned = False
         self._last_psi_error_warn: float | None = None
         self._last_psi_monotonic = None
+        self.psi_history: list[dict] = []  # avg10 gauges, the psi.svg source
 
         # Specified NUMA Node CPU Statistics
         self.target_numa_nodes = [0]
@@ -1847,7 +1848,8 @@ class VMMonitorBase(ABC):
         (kernel without CONFIG_PSI, or psi=0) latch after one WARNING and are
         never read again; readable-but-unparseable content warns at most once
         per _PSI_WARN_INTERVAL and keeps sampling; a healthy read appends the
-        flattened snapshot to host_psi_raw.csv.
+        flattened snapshot to host_psi_raw.csv and the avg10 gauges to
+        psi_history (the psi.svg source).
         """
         if self._proc_raw is None:  # no raw dumper -> nothing consumes rows
             return
@@ -1868,7 +1870,17 @@ class VMMonitorBase(ABC):
                 logger.warning("PSI files present but nothing parsed; PSI rows paused until content parses")
                 self._last_psi_error_warn = now
             return
-        self._proc_raw.enqueue_psi(ts, _psi_flat_row(psi))
+        row = _psi_flat_row(psi)
+        self.psi_history.append(
+            {
+                "ts": ts[:19],
+                "cpu_some": float(row.get("cpu_some_avg10", float("nan"))),
+                "cpu_full": float(row.get("cpu_full_avg10", float("nan"))),
+                "mem_some": float(row.get("memory_some_avg10", float("nan"))),
+                "mem_full": float(row.get("memory_full_avg10", float("nan"))),
+            }
+        )
+        self._proc_raw.enqueue_psi(ts, row)
 
     def _read_psi(self, psi_dir: str = "/proc/pressure") -> dict | None:
         """Parse /proc/pressure/{cpu,memory} into {resource: {kind: {field: value}}}.

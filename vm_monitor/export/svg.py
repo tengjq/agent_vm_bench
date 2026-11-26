@@ -510,6 +510,31 @@ def _host_pressure_report(target, rows):
     _render_report(target, "Host Pressure Time Curves", charts, [rows] * len(charts))
 
 
+def _psi_report(target, rows):
+    """psi.svg: kernel PSI stall gauges (some/full, avg10 window, cpu+memory).
+
+    Split from host_pressure.svg (reclaim *work* from /proc/vmstat): PSI
+    reports stall *time*. Rows land every PSI_MIN_INTERVAL (~10 s), so the
+    x-spacing here is coarser than the 2 s sample grid by design."""
+    charts = [
+        (
+            "PSI CPU Stall (avg10)",
+            "% of window",
+            [("cpu_some", "some", "#fb7185"), ("cpu_full", "full", "#f97316")],
+            None,
+        ),
+        (
+            "PSI Memory Stall (avg10)",
+            "% of window",
+            [("mem_some", "some", "#fb7185"), ("mem_full", "full", "#f97316")],
+            None,
+        ),
+    ]
+    elapsed = _elapsed_series(rows, 0)
+    rows = [dict(row, elapsed_s=e) for row, e in zip(rows, elapsed)]
+    _render_report(target, "PSI Stall Time Curves", charts, [rows] * len(charts))
+
+
 def _swap_report(target, rows):
     charts = [
         ("Swap Used", "MiB", [("swap_used_mb", "Used", "#fb7185")], None, "memory"),
@@ -591,6 +616,9 @@ def export_svg_reports(monitor, output_dir: str) -> list[str]:
         if getattr(monitor, "host_pressure_history", None):
             _host_pressure_report(_path("host_pressure.svg"), host_rows)
             written.append(_path("host_pressure.svg"))
+        if getattr(monitor, "psi_history", None):
+            _psi_report(_path("psi.svg"), monitor.psi_history)
+            written.append(_path("psi.svg"))
 
     swap_rows = _swap_rows(monitor)
     if swap_rows:

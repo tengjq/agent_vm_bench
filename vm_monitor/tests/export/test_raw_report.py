@@ -1398,3 +1398,85 @@ def test_vm_cores_sanity_warn_fires_on_overcount(tmp_path, caplog):
     assert math.isclose(df.iloc[1]["vm_cores"], 2000 / 100 / 2, abs_tol=0.01)  # 10.0
     assert any("vm_cores exceeded host_busy_cores" in m for m in caplog.messages)
     assert any("worst" in m for m in caplog.messages)
+
+
+def test_derive_host_psi_gauges_and_stall(tmp_path):
+    """host_psi_raw.csv present: avg10 gauges forward-fill onto the sample
+    grid and *_stall_pct derives from the total deltas (NaN on row 0)."""
+    _seed_all(tmp_path)
+    _write(
+        tmp_path / "host_psi_raw.csv",
+        [
+            "timestamp",
+            "cpu_some_avg10",
+            "cpu_full_avg10",
+            "memory_some_avg10",
+            "memory_full_avg10",
+            "cpu_some_total",
+            "memory_some_total",
+        ],
+        [
+            ["0", "5.0", "1.0", "3.0", "0.5", "1000000", "500000"],
+            ["2", "7.0", "2.0", "4.0", "0.7", "3000000", "1500000"],
+        ],
+    )
+    df = _derive_host(tmp_path)
+    assert df.loc[0, "psi_cpu_some"] == 5.0 and df.loc[1, "psi_cpu_some"] == 7.0
+    assert df.loc[1, "psi_mem_full"] == 0.7
+    # stall pct: d(total)=2e6 us over dt=2 s -> 100% of wall; row 0 NaN.
+    assert math.isnan(df.loc[0, "psi_cpu_stall_pct"])
+    assert math.isclose(df.loc[1, "psi_cpu_stall_pct"], 100.0, abs_tol=0.01)
+    assert math.isclose(df.loc[1, "psi_mem_stall_pct"], 50.0, abs_tol=0.01)
+
+
+def test_derive_host_no_psi_file_no_columns(tmp_path):
+    _seed_all(tmp_path)
+    df = _derive_host(tmp_path)
+    assert not [c for c in df.columns if c.startswith("psi_")]
+
+
+def test_build_xlsx_psi_columns_and_chart(tmp_path):
+    """PSI columns land on the Host resources sheet and the PSI chart renders
+    with all four series; PSI-less raw dirs keep the sheet/chart absent."""
+    d = tmp_path
+    _seed_all(d)
+    _write(
+        d / "host_psi_raw.csv",
+        [
+            "timestamp",
+            "cpu_some_avg10",
+            "cpu_full_avg10",
+            "memory_some_avg10",
+            "memory_full_avg10",
+            "cpu_some_total",
+            "memory_some_total",
+        ],
+        [
+            ["0", "5.0", "1.0", "3.0", "0.5", "1000000", "500000"],
+            ["2", "7.0", "2.0", "4.0", "0.7", "3000000", "1500000"],
+        ],
+    )
+    out = d / "host_resources.xlsx"
+    build_host_resources_xlsx(d, out)
+    wb = openpyxl.load_workbook(out)
+    host = wb["Host resources"]
+    titles = [_chart_title(c) for c in host._charts]
+    assert "PSI stall (avg10)" in titles
+    psi_chart = next(c for c in host._charts if _chart_title(c) == "PSI stall (avg10)")
+    assert len(psi_chart.series) == 4
+    headers = [c.value for c in host[1]]
+    for label in ("PSI CPU some (avg10 %)", "PSI Mem stall (% wall)"):
+        assert label in headers
+    stall_col = next(i for i, c in enumerate(host[1], start=1) if c.value == "PSI CPU stall (% wall)")
+    assert math.isclose(float(host.cell(row=3, column=stall_col).value), 100.0, abs_tol=0.01)
+
+    # PSI-less dir: no psi columns, no PSI chart (degradation).
+    d2 = tmp_path / "no_psi"
+    d2.mkdir()
+    _seed_all(d2)
+    out2 = d2 / "host_resources.xlsx"
+    build_host_resources_xlsx(d2, out2)
+    wb2 = openpyxl.load_workbook(out2)
+    titles2 = [_chart_title(c) for c in wb2["Host resources"]._charts]
+    assert "PSI stall (avg10)" not in titles2
+    assert not [c.value for c in wb2["Host resources"][1] if c.value and str(c.value).startswith("PSI")]
