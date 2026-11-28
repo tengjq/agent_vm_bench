@@ -100,6 +100,7 @@ _HOST_CHARTS = (
     ("Concurrent VMs", "count", ("concurrent_vms",)),
     ("Sandbox states (API)", "count", ("sandboxes_running", "sandboxes_paused")),
     ("PSI stall (avg10)", "% of window", ("psi_cpu_some", "psi_cpu_full", "psi_mem_some", "psi_mem_full")),
+    ("PSI stall share (% wall)", "% wall", ("psi_cpu_stall_pct", "psi_mem_stall_pct")),
 )
 
 # Disk I/O display labels, keyed by df-column suffix ("<device>_<field>"). Keeps

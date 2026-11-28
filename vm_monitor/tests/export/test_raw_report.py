@@ -1464,6 +1464,10 @@ def test_build_xlsx_psi_columns_and_chart(tmp_path):
     assert "PSI stall (avg10)" in titles
     psi_chart = next(c for c in host._charts if _chart_title(c) == "PSI stall (avg10)")
     assert len(psi_chart.series) == 4
+    share_chart = next(c for c in host._charts if _chart_title(c) == "PSI stall share (% wall)")
+    assert len(share_chart.series) == 2
+    titles_all = [_chart_title(c) for c in host._charts]
+    assert titles_all.index("PSI stall (avg10)") < titles_all.index("PSI stall share (% wall)")
     headers = [c.value for c in host[1]]
     for label in ("PSI CPU some (avg10 %)", "PSI Mem stall (% wall)"):
         assert label in headers
