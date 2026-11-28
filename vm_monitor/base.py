@@ -323,7 +323,11 @@ class _ProcRawWriter:
                                    microseconds, read at most once per PSI_MIN_INTERVAL
                                    (the avg10 window). Written only when the psi
                                    collector is enabled AND /proc/pressure exists;
-                                   a PSI-less host leaves the file absent.
+                                   a PSI-less host leaves the file absent. Fixed standard header
+                                   (_PSI_COLUMNS): fields the kernel lacks stay
+                                   empty; a field missing from the first sample
+                                   is written when it appears later.
+
 
     collect_sample enqueues the dicts already read for the swap / mem-detail /
     pressure collectors (meminfo, vmstat) plus a freshly parsed /proc/stat and the
@@ -365,6 +369,19 @@ class _ProcRawWriter:
         "discard_ms",
         "flush_requests",
         "flush_ms",
+    )
+
+    # host_psi_raw.csv uses a FIXED standard header (_PSI_COLUMNS), not the
+    # header-from-first-row contract of the other wide files: PSI collection is
+    # per-field tolerant, so a field can be absent from the first sample and
+    # appear later (old kernels: cpu has no `full`). A fixed column set lets
+    # the late field be written instead of silently dropped; fields the kernel
+    # does not provide stay empty ("").
+    _PSI_COLUMNS = tuple(
+        f"{resource}_{kind}_{field}"
+        for resource in ("cpu", "memory")
+        for kind in ("some", "full")
+        for field in ("avg10", "avg60", "avg300", "total")
     )
 
     def __init__(self, log_dir: str):
@@ -454,7 +471,7 @@ class _ProcRawWriter:
                 self._write_numa_mem(ts, nodes)
             elif tag == "psi":
                 _, ts, row = item
-                self._write_wide("psi", "host_psi_raw.csv", ts, row)
+                self._write_psi(ts, row)
 
     def _write_wide(self, key: str, fname: str, ts: str, row: dict) -> None:
         """Append one wide row; open file + write header from the first row."""
@@ -465,6 +482,24 @@ class _ProcRawWriter:
             dw.writeheader()
             sink = (fh, dw)
             self._wide[key] = sink
+        fh, dw = sink
+        dw.writerow({"timestamp": ts, **row})
+        fh.flush()  # line-buffered: rows land on disk promptly for crash safety
+
+    def _write_psi(self, ts: str, row: dict) -> None:
+        """Append one PSI row under the FIXED standard header (_PSI_COLUMNS).
+
+        Unlike the first-row-header wide files: a field missing from a sample
+        lands as "" (restval), a field absent from the FIRST sample but present
+        later is written from the sample reporting it, and unknown extra fields
+        are ignored (extrasaction="ignore")."""
+        sink = self._wide.get("psi")
+        if sink is None:
+            fh = open(os.path.join(self._dir, "host_psi_raw.csv"), "w", newline="", encoding="utf-8")
+            dw = csv.DictWriter(fh, fieldnames=["timestamp", *self._PSI_COLUMNS], restval="", extrasaction="ignore")
+            dw.writeheader()
+            sink = (fh, dw)
+            self._wide["psi"] = sink
         fh, dw = sink
         dw.writerow({"timestamp": ts, **row})
         fh.flush()  # line-buffered: rows land on disk promptly for crash safety

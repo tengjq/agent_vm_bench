@@ -284,10 +284,21 @@ def _psi_block(frames: dict, epochs: pd.Series) -> pd.DataFrame:
     clamped >= 0, NaN before the first pair). PSI-less captures (no
     host_psi_raw.csv) contribute no columns -- the sheet and its chart
     degrade cleanly.
+
+    Columns are read tolerantly: a column missing from the CSV (partial
+    first-row header from an older build, or an old kernel whose cpu file
+    has no `full`) reads as NaN, so one absent PSI field can never raise
+    and wipe the whole Host resources sheet.
     """
     psi = frames.get("psi")
     if psi is None or psi.empty:
         return pd.DataFrame(index=epochs.index)
+
+    def series(src: str) -> pd.Series:
+        if src in psi.columns:
+            return pd.to_numeric(psi[src], errors="coerce")
+        return pd.Series(math.nan, index=psi.index)
+
     names = (
         "psi_cpu_some",
         "psi_cpu_full",
@@ -307,20 +318,20 @@ def _psi_block(frames: dict, epochs: pd.Series) -> pd.DataFrame:
         "psi_mem_full": "memory_full_avg10",
     }
     for col, src in gauges.items():
-        series = pd.Series(psi[src].to_numpy(dtype=float), index=v_idx)
-        block[col] = pd.Series(series.reindex(stamps, method="ffill").to_numpy(), index=epochs.index)
+        joined = pd.Series(series(src).to_numpy(dtype=float), index=v_idx).reindex(stamps, method="ffill")
+        block[col] = pd.Series(joined.to_numpy(), index=epochs.index)
     totals = {
         "psi_cpu_stall_pct": "cpu_some_total",
         "psi_mem_stall_pct": "memory_some_total",
     }
     for col, src in totals.items():
-        tot = psi[src].to_numpy(dtype=float)
+        tot = series(src).to_numpy(dtype=float)
         rate = pd.Series(np.full(len(tot), math.nan), index=v_idx)
         if len(tot) > 1:
             dt = np.diff(v_idx)
             rate.iloc[1:] = np.maximum(0.0, tot[1:] - tot[:-1]) / 1e6 / np.maximum(dt, 1e-9) * 100.0
         block[col] = pd.Series(rate.reindex(stamps, method="ffill").to_numpy(), index=epochs.index)
-    return block
+    return block.dropna(axis=1, how="all")
 
 
 def _fleet_block(frames: dict, epochs: pd.Series) -> pd.DataFrame:

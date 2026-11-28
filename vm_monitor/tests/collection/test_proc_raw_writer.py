@@ -363,3 +363,31 @@ def test_proc_raw_writer_dumps_psi():
     assert rows[0]["cpu_some_avg10"] == "12.34"
     assert rows[0]["cpu_some_total"] == "123456"
     assert rows[0]["memory_full_total"] == "40"
+
+
+def test_proc_raw_writer_psi_fixed_header_recovers_late_field():
+    """host_psi_raw.csv uses a fixed standard header: a field missing from the
+    first sample lands as "" and is written from the sample where it appears
+    (old-kernel cpu has no `full`; a later job reporting it must not be
+    silently dropped by the first-row header)."""
+    with tempfile.TemporaryDirectory() as d:
+        w = _ProcRawWriter(d)
+        w.enqueue_psi("2026-01-01 00:00:00", {"cpu_some_avg10": 1.0, "cpu_some_total": 10})
+        w.enqueue_psi(
+            "2026-01-01 00:00:10",
+            {
+                "cpu_some_avg10": 2.0,
+                "cpu_full_avg10": 0.5,
+                "cpu_some_total": 30,
+                "memory_some_avg10": 4.0,
+                "memory_some_total": 20,
+            },
+        )
+        w.close()
+        with open(os.path.join(d, "raw_data", "host_psi_raw.csv")) as f:
+            rows = list(csv.DictReader(f))
+    assert rows[0]["cpu_some_avg10"] == "1.0"
+    assert rows[0]["cpu_full_avg10"] == ""  # absent from sample 1 -> empty cell
+    assert rows[1]["cpu_full_avg10"] == "0.5"  # late field IS written
+    assert rows[1]["memory_some_avg10"] == "4.0"
+    assert len(rows[0]) == 17  # timestamp + the 16 standard columns

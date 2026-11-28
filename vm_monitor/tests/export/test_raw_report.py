@@ -1484,3 +1484,69 @@ def test_build_xlsx_psi_columns_and_chart(tmp_path):
     titles2 = [_chart_title(c) for c in wb2["Host resources"]._charts]
     assert "PSI stall (avg10)" not in titles2
     assert not [c.value for c in wb2["Host resources"][1] if c.value and str(c.value).startswith("PSI")]
+
+
+def test_derive_host_psi_partial_columns_old_kernel(tmp_path):
+    """Old-kernel capture: cpu has no `full` columns at all. The missing
+    column must not raise -- usable metrics survive and the host sheet is
+    still built (regression: KeyError('cpu_full_avg10') used to wipe the
+    whole Host resources sheet)."""
+    _seed_all(tmp_path)
+    _write(
+        tmp_path / "host_psi_raw.csv",
+        [
+            "timestamp",
+            "cpu_some_avg10",
+            "cpu_some_total",
+            "memory_some_avg10",
+            "memory_full_avg10",
+            "memory_some_total",
+        ],
+        [
+            ["0", "5.0", "1000000", "3.0", "0.5", "500000"],
+            ["2", "7.0", "3000000", "4.0", "0.7", "1500000"],
+        ],
+    )
+    df = _derive_host(tmp_path)
+    assert df.loc[1, "psi_cpu_some"] == 7.0
+    assert "psi_cpu_full" not in df.columns  # absent column -> column dropped
+    assert math.isclose(df.loc[1, "psi_mem_stall_pct"], 50.0, abs_tol=0.01)
+    out = tmp_path / "host_resources.xlsx"
+    build_host_resources_xlsx(tmp_path, out)
+    wb = openpyxl.load_workbook(out)
+    assert "Host resources" in wb.sheetnames
+    headers = [c.value for c in wb["Host resources"][1]]
+    assert "CPU busy (%)" in headers  # the normal metrics survived
+    assert "PSI CPU some (avg10 %)" in headers
+    assert "PSI CPU full (avg10 %)" not in headers  # absent source -> no column
+    psi_chart = next(c for c in wb["Host resources"]._charts if _chart_title(c) == "PSI stall (avg10)")
+    assert len(psi_chart.series) == 3  # cpu_full dropped (no data), rest kept
+
+
+def test_derive_host_psi_field_recovers_mid_run(tmp_path):
+    """First sample missing a field, later sample has it (fixed-header CSV):
+    the recovered field reads NaN until it appears, then real values -- and
+    the host sheet survives."""
+    _seed_all(tmp_path)
+    _write(
+        tmp_path / "host_psi_raw.csv",
+        [
+            "timestamp",
+            "cpu_some_avg10",
+            "cpu_full_avg10",
+            "cpu_some_total",
+            "memory_some_avg10",
+            "memory_some_total",
+        ],
+        [
+            ["0", "5.0", "", "1000000", "3.0", "500000"],
+            ["2", "7.0", "0.5", "3000000", "4.0", "1500000"],
+        ],
+    )
+    df = _derive_host(tmp_path)
+    assert math.isnan(df.loc[0, "psi_cpu_full"])
+    assert df.loc[1, "psi_cpu_full"] == 0.5
+    out = tmp_path / "host_resources.xlsx"
+    build_host_resources_xlsx(tmp_path, out)
+    wb = openpyxl.load_workbook(out)
+    assert "Host resources" in wb.sheetnames
